@@ -1,0 +1,66 @@
+name: Build Saytara Master VST3 (Windows)
+
+on:
+  push:
+    branches: [ main, master ]
+  workflow_dispatch:
+
+jobs:
+  build-windows-vst3:
+    runs-on: windows-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Extract Project Archive
+        shell: pwsh
+        run: |
+          if (Test-Path "SaytaraMaster_VST3_Project.zip") {
+            Expand-Archive -Path "SaytaraMaster_VST3_Project.zip" -DestinationPath "src" -Force
+          } elseif (Test-Path "Notifications.7z") {
+            7z x "Notifications.7z" -osrc -y
+          } else {
+            Write-Error "No SaytaraMaster archive found!"
+            exit 1
+          }
+          $cmake = Get-ChildItem -Path "src" -Filter "CMakeLists.txt" -Recurse | Select-Object -First 1
+          if (-not $cmake) {
+            Write-Error "CMakeLists.txt not found inside archive!"
+            exit 1
+          }
+          "SRC_DIR=$($cmake.DirectoryName)" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+
+      - name: Configure CMake (Visual Studio 2022 x64)
+        shell: pwsh
+        run: |
+          cmake -S "$env:SRC_DIR" -B build -G "Visual Studio 17 2022" -A x64
+
+      - name: Build Saytara Master & Saytara Link VST3 (Release)
+        run: |
+          cmake --build build --config Release --target SaytaraMaster_VST3 SaytaraLink_VST3 --parallel
+
+      - name: Stage VST3 bundles + 1-Click Installer
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force -Path dist | Out-Null
+          Copy-Item -Recurse -Force "build\SaytaraMaster_artefacts\Release\VST3\Saytara Master.vst3" "dist\"
+          Copy-Item -Recurse -Force "build\SaytaraLink_artefacts\Release\VST3\Saytara Link.vst3" "dist\"
+          if (Test-Path "$env:SRC_DIR\README_AR.md") { Copy-Item -Force "$env:SRC_DIR\README_AR.md" "dist\" }
+          @(
+            '@echo off'
+            'echo Installing Saytara Master and Saytara Link VST3...'
+            'if not exist "C:\Program Files\Common Files\VST3" mkdir "C:\Program Files\Common Files\VST3"'
+            'xcopy /E /I /Y "%~dp0Saytara Master.vst3" "C:\Program Files\Common Files\VST3\Saytara Master.vst3"'
+            'xcopy /E /I /Y "%~dp0Saytara Link.vst3" "C:\Program Files\Common Files\VST3\Saytara Link.vst3"'
+            'echo.'
+            'echo Done! Open FL Studio -> Options -> Manage plugins -> Find installed plugins.'
+            'pause'
+          ) | Set-Content -Path "dist\INSTALL_SAYTARA.bat" -Encoding ASCII
+
+      - name: Upload SaytaraMaster-Windows-VST3 Artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: SaytaraMaster-Windows-VST3
+          path: dist/
+          
